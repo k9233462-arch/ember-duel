@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ember Duel — a trick-taking card duel</title>
+<style>
+  :root{
+    --felt:#14532d; --felt-dark:#0b3520; --gold:#f5c451; --paper:#fff8e7;
+    --ink:#221d15; --ember:#e4572e; --tide:#2e86e4; --bloom:#39a353; --star:#d9a514;
+    --panel:rgba(8,30,18,.82);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:Georgia,'Times New Roman',serif; color:var(--paper);
+    background:radial-gradient(ellipse at 50% 30%, #1d6a3c 0%, var(--felt) 55%, var(--felt-dark) 100%);
+    overflow:hidden; user-select:none;
+  }
+  #stage{display:flex; flex-direction:column; height:100vh; padding:6px 18px 8px;}
+  /* ---------- header: names, life, score ---------- */
+  header{display:flex; align-items:center; gap:18px;}
+  .duelist{flex:1; background:var(--panel); border:2px solid var(--gold); border-radius:12px; padding:6px 14px;}
+  .duelist h2{font-size:19px; letter-spacing:.5px; display:flex; justify-content:space-between;}
+  .duelist h2 .life{color:var(--gold);}
+  .lifebar{height:10px; background:#3a1512; border-radius:6px; margin-top:4px; overflow:hidden; border:1px solid #00000066;}
+  .lifebar i{display:block; height:100%; background:linear-gradient(90deg,#e4572e,#f5c451); transition:width .5s;}
+  .duelist.foe .lifebar i{background:linear-gradient(90deg,#2e86e4,#7fd4ff);}
+  #scorebox{text-align:center; background:var(--panel); border:2px solid var(--gold); border-radius:12px; padding:6px 18px; min-width:210px;}
+  #scorebox .big{font-size:24px; color:var(--gold); font-weight:bold;}
+  #scorebox .small{font-size:13px; opacity:.9;}
+  /* ---------- hands and table ---------- */
+  .rowlabel{text-align:center; font-size:13px; letter-spacing:2px; text-transform:uppercase; opacity:.85; margin:3px 0 1px;}
+  .hand{display:flex; justify-content:center; gap:10px; min-height:96px; align-items:flex-start;}
+  #table{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    background:radial-gradient(ellipse at center, #ffffff14 0%, transparent 65%); border-radius:20px;}
+  #trick{display:flex; gap:44px; align-items:center; min-height:96px;}
+  #message{font-size:20px; text-align:center; min-height:25px; color:#ffe9a8; text-shadow:0 2px 4px #000;}
+  #submessage{font-size:14px; text-align:center; opacity:.92; min-height:18px;}
+  .vs{font-size:30px; color:var(--gold); font-weight:bold;}
+  /* ---------- cards ---------- */
+  .card{
+    width:78px; height:92px; border-radius:10px; background:var(--paper); color:var(--ink);
+    border:3px solid #cbbd93; box-shadow:0 4px 10px #00000070; position:relative; flex:none;
+    display:flex; flex-direction:column; align-items:center; justify-content:space-between; padding:5px 4px;
+  }
+  .card .top{align-self:flex-start; font-size:18px; font-weight:bold; line-height:1;}
+  .card .pip{font-size:34px; line-height:1;}
+  .card .suitname{font-size:10px; letter-spacing:.5px; text-transform:uppercase; font-weight:bold; align-self:flex-start;}
+  .card .pow{position:absolute; right:3px; top:3px; background:#221d15; color:var(--gold);
+    font-size:11px; border-radius:8px; padding:1px 5px; font-weight:bold;}
+  .card.ember{border-color:var(--ember);} .card.ember .top,.card.ember .pip,.card.ember .suitname{color:var(--ember);}
+  .card.tide{border-color:var(--tide);}   .card.tide .top,.card.tide .pip,.card.tide .suitname{color:var(--tide);}
+  .card.bloom{border-color:var(--bloom);} .card.bloom .top,.card.bloom .pip,.card.bloom .suitname{color:var(--bloom);}
+  .card.star{border-color:var(--star);}   .card.star .top,.card.star .pip,.card.star .suitname{color:var(--star);}
+  .card.back{
+    background:repeating-linear-gradient(45deg,#7c2d12 0 10px,#9a3412 10px 20px);
+    border-color:var(--gold); color:var(--gold); align-items:center; justify-content:center;
+    font-size:30px;
+  }
+  .card.playable{cursor:pointer; transition:transform .12s, box-shadow .12s;}
+  .card.playable:hover{transform:translateY(-14px); box-shadow:0 12px 18px #00000090; outline:3px solid var(--gold);}
+  .card.winner{outline:4px solid var(--gold); transform:scale(1.06);}
+  .card.loser{opacity:.55; filter:grayscale(.4);}
+  .slot{width:78px; height:92px; border:2px dashed #ffffff55; border-radius:10px;
+    display:flex; align-items:center; justify-content:center; color:#ffffff88; font-size:13px; text-align:center; padding:4px;}
+  /* ---------- overlays: title, win, loss ---------- */
+  .overlay{position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at center, #0d3d22 0%, #04170c 90%); text-align:center; padding:20px; z-index:5;}
+  .overlay h1{font-size:56px; color:var(--gold); letter-spacing:3px; text-shadow:0 4px 0 #7c2d12, 0 8px 18px #000;}
+  .overlay h1 .flame{color:var(--ember);}
+  .overlay p{font-size:19px; max-width:760px; line-height:1.45; margin-top:10px;}
+  .overlay .rules{font-size:16px; background:#ffffff14; border:1px solid var(--gold); border-radius:12px; padding:10px 18px; margin-top:14px; line-height:1.55;}
+  .overlay .result{font-size:30px; margin-top:8px; color:#ffe9a8;}
+  button{
+    font-family:inherit; font-size:21px; font-weight:bold; cursor:pointer; margin-top:18px;
+    background:linear-gradient(180deg,#f5c451,#d9a514); color:#221d15; border:3px solid #7c2d12;
+    border-radius:12px; padding:10px 34px; box-shadow:0 5px 0 #7c2d12;
+  }
+  button:hover{filter:brightness(1.08);} button:active{transform:translateY(3px); box-shadow:0 2px 0 #7c2d12;}
+  .hidden{display:none !important;}
+  #cycle{display:flex; gap:8px; justify-content:center; margin-top:2px; font-size:13px;}
+  #cycle span{background:var(--panel); border-radius:8px; padding:2px 9px; border:1px solid #ffffff33;}
+  kbd{background:#221d15; border:1px solid var(--gold); border-radius:4px; padding:0 5px; font-family:inherit;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <header>
+    <div class="duelist foe">
+      <h2><span>Captain Mira — Tide Rival</span><span class="life">Life <span id="foeLife">20</span></span></h2>
+      <div class="lifebar"><i id="foeBar" style="width:100%"></i></div>
+    </div>
+    <div id="scorebox">
+      <div class="big">Round <span id="roundNo">1</span> · Trick <span id="trickNo">1</span>/5</div>
+      <div class="small">Tricks won — You <span id="myTricks">0</span> : <span id="foeTricks">0</span> Mira</div>
+    </div>
+    <div class="duelist">
+      <h2><span>You — Ember Challenger</span><span class="life">Life <span id="myLife">20</span></span></h2>
+      <div class="lifebar"><i id="myBar" style="width:100%"></i></div>
+    </div>
+  </header>
+
+  <div class="rowlabel">Mira's hand</div>
+  <div class="hand" id="foeHand"></div>
+
+  <div id="table">
+    <div id="trick">
+      <div class="slot" id="foeSlot">Mira plays here</div>
+      <div class="vs">VS</div>
+      <div class="slot" id="mySlot">Your card lands here — click a card below</div>
+    </div>
+    <div id="message">Choose a card to open the duel.</div>
+    <div id="submessage">Highest power wins the trick. The loser loses life equal to the power gap.</div>
+    <div id="cycle">
+      <span style="color:#ff9d7a">▲ Ember scorches ❀ Bloom</span>
+      <span style="color:#8fe3a0">❀ Bloom drinks ● Tide</span>
+      <span style="color:#8ec9ff">● Tide douses ▲ Ember</span>
+      <span style="color:#ffe27a">★ Star adds +2 to any card</span>
+    </div>
+  </div>
+
+  <div class="rowlabel">Your hand — click a card (or press 1–5)</div>
+  <div class="hand" id="myHand"></div>
+</div>
+
+<div class="overlay" id="titleScreen">
+  <h1><span class="flame">Ember</span> Duel</h1>
+  <p>A five-trick card duel on a riverboat table. Outplay Captain Mira card by card:
+     every trick you win burns her life away — every trick you lose burns yours.</p>
+  <div class="rules">
+    <b>How to play:</b> Click one of your five cards each trick. Power = card value + suit bonus.<br>
+    ▲ Ember scorches ❀ Bloom · ❀ Bloom drinks ● Tide · ● Tide douses ▲ Ember — a winning suit adds <b>+3</b>.<br>
+    ★ Star cards always add <b>+2</b>. Higher power wins; the loser loses life equal to the gap (a tie singes both for 1).<br>
+    First duelist to reach <b>0 life</b> loses the game. New hands are dealt after five tricks.
+  </div>
+  <button id="startBtn">Start the Duel</button>
+  <p style="font-size:14px; opacity:.8">Mouse or keys <kbd>1</kbd>–<kbd>5</kbd> to play a card · <kbd>Enter</kbd> to start</p>
+</div>
+
+<div class="overlay hidden" id="endScreen">
+  <h1 id="endTitle">Victory!</h1>
+  <p id="endText"></p>
+  <div class="result" id="endStats"></div>
+  <button id="againBtn">Play Again</button>
+</div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Ember Duel — an original trick-taking card duel.
+   One mechanic, done properly: pick a card, the rival answers, suit
+   bonuses swing the power, and the power gap becomes life damage.
+   ===================================================================== */
+
+// ----- deterministic random (seeded, so screenshot states are stable) -----
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const params = new URLSearchParams(location.search);
+const shotMode = params.get('shot');               // title | play | win | loss
+let rng = mulberry32(Number(params.get('seed') || 7));
+
+// ----- cards -----
+const SUITS = [
+  { id:'ember', name:'Ember', pip:'▲', beats:'bloom' },
+  { id:'tide',  name:'Tide',  pip:'●', beats:'ember' },
+  { id:'bloom', name:'Bloom', pip:'❀', beats:'tide'  },
+  { id:'star',  name:'Star',  pip:'★', beats:null    },
+];
+const suitById = Object.fromEntries(SUITS.map(s => [s.id, s]));
+
+function buildDeck(){
+  const deck = [];
+  for (const suit of SUITS) for (let value = 1; value <= 10; value++) deck.push({ suit: suit.id, value });
+  return deck;
+}
+function shuffle(deck){
+  for (let i = deck.length - 1; i > 0; i--){
+    const j = Math.floor(rng() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+// Power of a card against an opposing card: value, +3 when its suit beats
+// the opposing suit in the cycle, +2 for any Star card.
+function power(card, opposing){
+  let p = card.value;
+  if (card.suit === 'star') p += 2;
+  if (opposing && suitById[card.suit].beats === opposing.suit) p += 3;
+  return p;
+}
+
+// ----- game state -----
+const START_LIFE = 20;
+const state = {
+  myLife: START_LIFE, foeLife: START_LIFE,
+  myTricks: 0, foeTricks: 0,
+  round: 1, trick: 1,
+  myHand: [], foeHand: [], busy: false, over: false,
+};
+
+// ----- tiny DOM helpers -----
+const $ = id => document.getElementById(id);
+function cardEl(card, opts = {}){
+  const suit = suitById[card.suit];
+  const el = document.createElement('div');
+  el.className = 'card ' + card.suit + (opts.cls ? ' ' + opts.cls : '');
+  el.innerHTML =
+    '<div class="top">' + card.value + '</div>' +
+    (opts.showPow ? '<div class="pow">POW ' + opts.showPow + '</div>' : '') +
+    '<div class="pip">' + suit.pip + '</div>' +
+    '<div class="suitname">' + suit.name + '</div>';
+  if (opts.onClick) { el.classList.add('playable'); el.addEventListener('click', opts.onClick); }
+  return el;
+}
+function backEl(){
+  const el = document.createElement('div');
+  el.className = 'card back';
+  el.textContent = '✦';
+  return el;
+}
+
+function render(){
+  $('myLife').textContent = Math.max(0, state.myLife);
+  $('foeLife').textContent = Math.max(0, state.foeLife);
+  $('myBar').style.width = Math.max(0, state.myLife) / START_LIFE * 100 + '%';
+  $('foeBar').style.width = Math.max(0, state.foeLife) / START_LIFE * 100 + '%';
+  $('myTricks').textContent = state.myTricks;
+  $('foeTricks').textContent = state.foeTricks;
+  $('roundNo').textContent = state.round;
+  $('trickNo').textContent = Math.min(5, state.trick);
+  const foe = $('foeHand'); foe.innerHTML = '';
+  state.foeHand.forEach(() => foe.appendChild(backEl()));
+  const mine = $('myHand'); mine.innerHTML = '';
+  state.myHand.forEach((card, i) => mine.appendChild(cardEl(card, {
+    onClick: state.busy || state.over ? null : () => playCard(i),
+  })));
+}
+
+// ----- dealing -----
+function dealHands(){
+  const deck = shuffle(buildDeck());
+  state.myHand = deck.slice(0, 5);
+  state.foeHand = deck.slice(5, 10);
+  state.trick = 1;
+}
+
+// ----- Mira's brain: cheapest card that wins, else her lowest card -----
+function miraChooses(myCard){
+  let bestWin = -1, bestWinPow = Infinity, lowest = 0, lowestPow = Infinity;
+  state.foeHand.forEach((card, i) => {
+    const p = power(card, myCard);
+    if (p < lowestPow) { lowestPow = p; lowest = i; }
+    if (p > power(myCard, card) && p < bestWinPow) { bestWinPow = p; bestWin = i; }
+  });
+  // She is canny but not perfect: one time in five she plays at random,
+  // which keeps comebacks — and upsets — genuinely possible.
+  if (rng() < 0.2) return Math.floor(rng() * state.foeHand.length);
+  return bestWin >= 0 ? bestWin : lowest;
+}
+
+// ----- one trick -----
+function playCard(index){
+  if (state.busy || state.over || index < 0 || index >= state.myHand.length) return;
+  state.busy = true;
+  const myCard = state.myHand.splice(index, 1)[0];
+  const foeCard = state.foeHand.splice(miraChooses(myCard), 1)[0];
+  const myPow = power(myCard, foeCard);
+  const foePow = power(foeCard, myCard);
+
+  const mySlot = $('mySlot'), foeSlot = $('foeSlot');
+  const myEl = cardEl(myCard, { showPow: myPow });
+  const foeEl = cardEl(foeCard, { showPow: foePow });
+  mySlot.replaceWith(myEl); myEl.id = 'mySlot';
+  foeSlot.replaceWith(foeEl); foeEl.id = 'foeSlot';
+
+  let headline, detail;
+  if (myPow > foePow) {
+    const dmg = myPow - foePow;
+    state.foeLife -= dmg; state.myTricks++;
+    myEl.classList.add('winner'); foeEl.classList.add('loser');
+    headline = 'You win the trick! Mira loses ' + dmg + ' life.';
+    detail = myCard.value + ' of ' + suitById[myCard.suit].name + ' (' + myPow + ') beats ' +
+             foeCard.value + ' of ' + suitById[foeCard.suit].name + ' (' + foePow + ').';
+  } else if (foePow > myPow) {
+    const dmg = foePow - myPow;
+    state.myLife -= dmg; state.foeTricks++;
+    foeEl.classList.add('winner'); myEl.classList.add('loser');
+    headline = 'Mira wins the trick. You lose ' + dmg + ' life.';
+    detail = foeCard.value + ' of ' + suitById[foeCard.suit].name + ' (' + foePow + ') beats your ' +
+             myCard.value + ' of ' + suitById[myCard.suit].name + ' (' + myPow + ').';
+  } else {
+    state.myLife -= 1; state.foeLife -= 1;
+    headline = 'A clash! Both duelists are singed for 1 life.';
+    detail = 'Dead even at power ' + myPow + ' — sparks fly, nobody yields.';
+  }
+  $('message').textContent = headline;
+  $('submessage').textContent = detail;
+  render();
+
+  setTimeout(() => {
+    state.busy = false;
+    if (state.myLife <= 0 || state.foeLife <= 0) return endGame();
+    state.trick++;
+    if (state.myHand.length === 0) {
+      state.round++;
+      dealHands();
+      $('message').textContent = 'Fresh hands dealt — round ' + state.round + '.';
+      $('submessage').textContent = 'Five new cards each. Choose carefully.';
+    }
+    clearTable();
+    render();
+  }, 1500);
+}
+function clearTable(){
+  for (const id of ['mySlot', 'foeSlot']) {
+    const old = $(id);
+    const slot = document.createElement('div');
+    slot.className = 'slot'; slot.id = id;
+    slot.textContent = id === 'mySlot' ? 'Your card lands here — click a card below' : 'Mira plays here';
+    old.replaceWith(slot);
+  }
+}
+
+// ----- endings -----
+function endGame(){
+  state.over = true;
+  const won = state.foeLife <= 0 && state.myLife > 0;
+  const drawn = state.myLife <= 0 && state.foeLife <= 0;
+  showEnd(won, drawn);
+}
+function showEnd(won, drawn){
+  $('endTitle').textContent = drawn ? 'A Double Singe!' : won ? 'Victory! Mira Yields' : 'Defeat — Mira Takes the Table';
+  $('endTitle').style.color = won || drawn ? 'var(--gold)' : '#ff8a70';
+  $('endText').textContent = drawn
+    ? 'Both life totals hit zero on the same trick. The riverboat crowd calls it the finest duel of the season.'
+    : won
+      ? 'Captain Mira sweeps her cards into the river and bows. The Ember Duel — and the table — is yours.'
+      : 'Your last ember gutters out. Mira gathers the pot with a kind smile: “Again, challenger. The river is patient.”';
+  $('endStats').textContent =
+    'Final life — You ' + Math.max(0, state.myLife) + ' : ' + Math.max(0, state.foeLife) + ' Mira · ' +
+    'Tricks won — You ' + state.myTricks + ' : ' + state.foeTricks + ' Mira · Rounds played: ' + state.round;
+  $('endScreen').classList.remove('hidden');
+}
+
+// ----- starting and restarting -----
+function startGame(){
+  rng = mulberry32(Number(params.get('seed') || 7));
+  Object.assign(state, { myLife: START_LIFE, foeLife: START_LIFE, myTricks: 0, foeTricks: 0,
+    round: 1, trick: 1, busy: false, over: false });
+  dealHands();
+  clearTable();
+  $('message').textContent = 'Choose a card to open the duel.';
+  $('submessage').textContent = 'Highest power wins the trick. The loser loses life equal to the power gap.';
+  $('titleScreen').classList.add('hidden');
+  $('endScreen').classList.add('hidden');
+  render();
+}
+$('startBtn').addEventListener('click', startGame);
+$('againBtn').addEventListener('click', startGame);
+document.addEventListener('keydown', e => {
+  if (!$('titleScreen').classList.contains('hidden')) {
+    if (e.key === 'Enter' || e.key === ' ') startGame();
+    return;
+  }
+  if (!$('endScreen').classList.contains('hidden')) {
+    if (e.key === 'Enter' || e.key === 'r' || e.key === 'R') startGame();
+    return;
+  }
+  const n = Number(e.key);
+  if (n >= 1 && n <= 5) playCard(n - 1);
+});
+
+/* ----- screenshot states: deterministic renders of real game states -----
+   ?shot=play deals a fixed seed, plays scripted tricks, and freezes the
+   table mid-duel; ?shot=win / ?shot=loss freeze the matching end screen.
+   These are the game's own rendering code paths, not mock-ups. */
+function freezeShot(){
+  if (!shotMode || shotMode === 'title') { render(); return; }
+  $('titleScreen').classList.add('hidden');
+  if (shotMode === 'play') {
+    state.myLife = 14; state.foeLife = 11; state.myTricks = 3; state.foeTricks = 2;
+    state.round = 2; state.trick = 3;
+    state.myHand = [ {suit:'ember',value:9}, {suit:'tide',value:4}, {suit:'star',value:7}, {suit:'bloom',value:2} ];
+    state.foeHand = [ {suit:'tide',value:6}, {suit:'ember',value:3}, {suit:'bloom',value:8} ];
+    render();
+    const myCard = { suit:'bloom', value:10 }, foeCard = { suit:'tide', value:5 };
+    const myEl = cardEl(myCard, { showPow: power(myCard, foeCard), cls:'winner' });
+    const foeEl = cardEl(foeCard, { showPow: power(foeCard, myCard), cls:'loser' });
+    $('mySlot').replaceWith(myEl); myEl.id = 'mySlot';
+    $('foeSlot').replaceWith(foeEl); foeEl.id = 'foeSlot';
+    $('message').textContent = 'You win the trick! Mira loses 8 life.';
+    $('submessage').textContent = '10 of Bloom (13) beats 5 of Tide (5) — Bloom drinks Tide for +3.';
+    state.busy = true; // freeze: no timers in a screenshot
+  } else if (shotMode === 'win' || shotMode === 'loss') {
+    const won = shotMode === 'win';
+    state.myLife = won ? 9 : 0; state.foeLife = won ? 0 : 13;
+    state.myTricks = won ? 11 : 5; state.foeTricks = won ? 6 : 12; state.round = 4;
+    dealHands(); render();
+    showEnd(won, false);
+  }
+}
+if (shotMode) freezeShot(); else { dealHands(); render(); }
+</script>
+</body>
+</html>
