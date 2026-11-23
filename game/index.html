@@ -58,6 +58,10 @@
     border-color:var(--gold); color:var(--gold); align-items:center; justify-content:center;
     font-size:30px;
   }
+  .card .pow.live{background:var(--ember); color:#fff; font-size:12px; padding:2px 6px; top:24px;}
+  .card .pow.live.winning{background:#1d7a3a;}
+  .card.leadcard{outline:4px solid var(--tide); transform:scale(1.06);}
+  #leadBanner{font-size:15px; color:#8ec9ff; min-height:19px; text-align:center; font-weight:bold; letter-spacing:.4px;}
   .card.playable{cursor:pointer; transition:transform .12s, box-shadow .12s;}
   .card.playable:hover{transform:translateY(-14px); box-shadow:0 12px 18px #00000090; outline:3px solid var(--gold);}
   .card.winner{outline:4px solid var(--gold); transform:scale(1.06);}
@@ -110,6 +114,7 @@
       <div class="vs">VS</div>
       <div class="slot" id="mySlot">Your card lands here — click a card below</div>
     </div>
+    <div id="leadBanner"></div>
     <div id="message">Choose a card to open the duel.</div>
     <div id="submessage">Highest power wins the trick. The loser loses life equal to the power gap.</div>
     <div id="cycle">
@@ -132,6 +137,8 @@
     <b>How to play:</b> Click one of your five cards each trick. Power = card value + suit bonus.<br>
     ▲ Ember scorches ❀ Bloom · ❀ Bloom drinks ● Tide · ● Tide douses ▲ Ember — a winning suit adds <b>+3</b>.<br>
     ★ Star cards always add <b>+2</b>. Higher power wins; the loser loses life equal to the gap (a tie singes both for 1).<br>
+    <b>The winner leads the next trick.</b> When Mira leads, her card lies face-up on the table and every card in your
+    hand shows the exact power it would score against it — dump a low card, or spend the one card that beats her.<br>
     First duelist to reach <b>0 life</b> loses the game. New hands are dealt after five tricks.
   </div>
   <button id="startBtn">Start the Duel</button>
@@ -204,6 +211,8 @@ const state = {
   myTricks: 0, foeTricks: 0,
   round: 1, trick: 1,
   myHand: [], foeHand: [], busy: false, over: false,
+  leader: 'me',        // who leads this trick: the previous trick's winner
+  leadCard: null,      // Mira's face-up lead card waiting for an answer
 };
 
 // ----- tiny DOM helpers -----
@@ -214,7 +223,7 @@ function cardEl(card, opts = {}){
   el.className = 'card ' + card.suit + (opts.cls ? ' ' + opts.cls : '');
   el.innerHTML =
     '<div class="top">' + card.value + '</div>' +
-    (opts.showPow ? '<div class="pow">POW ' + opts.showPow + '</div>' : '') +
+    (opts.showPow ? '<div class="pow' + (opts.powCls ? ' ' + opts.powCls : '') + '">POW ' + opts.showPow + '</div>' : '') +
     '<div class="pip">' + suit.pip + '</div>' +
     '<div class="suitname">' + suit.name + '</div>';
   if (opts.onClick) { el.classList.add('playable'); el.addEventListener('click', opts.onClick); }
@@ -239,9 +248,21 @@ function render(){
   const foe = $('foeHand'); foe.innerHTML = '';
   state.foeHand.forEach(() => foe.appendChild(backEl()));
   const mine = $('myHand'); mine.innerHTML = '';
-  state.myHand.forEach((card, i) => mine.appendChild(cardEl(card, {
-    onClick: state.busy || state.over ? null : () => playCard(i),
-  })));
+  state.myHand.forEach((card, i) => {
+    // When Mira has led, every card in hand carries a live preview badge:
+    // the exact power it would score against her face-up lead card, green
+    // when that answer would win the trick, ember when it would not.
+    const opts = { onClick: state.busy || state.over ? null : () => playCard(i) };
+    if (state.leadCard) {
+      const p = power(card, state.leadCard);
+      opts.showPow = p;
+      opts.powCls = p > power(state.leadCard, card) ? 'live winning' : 'live';
+    }
+    mine.appendChild(cardEl(card, opts));
+  });
+  $('leadBanner').textContent = state.leadCard
+    ? '▼ Mira leads — answer her card. Green badges win the trick.'
+    : (state.leader === 'me' ? 'You lead this trick — Mira answers your card.' : '');
 }
 
 // ----- dealing -----
@@ -266,12 +287,37 @@ function miraChooses(myCard){
   return bestWin >= 0 ? bestWin : lowest;
 }
 
+// ----- Mira leads: her strongest standalone card, laid face-up -----
+// Leading is a real commitment: she shows her card and its power first,
+// and the player answers with full information. She usually leads her
+// highest base power (value + Star bonus); one time in five she leads a
+// random card instead, bluffing a weak suit she hopes the player overpays
+// to beat.
+function miraLeads(){
+  if (state.foeHand.length === 0 || state.over) return;
+  let idx = 0, best = -Infinity;
+  state.foeHand.forEach((card, i) => {
+    const base = card.value + (card.suit === 'star' ? 2 : 0);
+    if (base > best) { best = base; idx = i; }
+  });
+  if (rng() < 0.2) idx = Math.floor(rng() * state.foeHand.length);
+  state.leadCard = state.foeHand.splice(idx, 1)[0];
+  const foeEl = cardEl(state.leadCard, { showPow: power(state.leadCard, null), cls: 'leadcard' });
+  $('foeSlot').replaceWith(foeEl); foeEl.id = 'foeSlot';
+  $('message').textContent = 'Mira leads with the ' + state.leadCard.value + ' of ' +
+    suitById[state.leadCard.suit].name + ' — answer it, or dump a card you do not need.';
+  $('submessage').textContent = 'Your hand shows the power each card scores against her lead. Win the trick and you lead the next one.';
+  render();
+}
+
 // ----- one trick -----
 function playCard(index){
   if (state.busy || state.over || index < 0 || index >= state.myHand.length) return;
   state.busy = true;
   const myCard = state.myHand.splice(index, 1)[0];
-  const foeCard = state.foeHand.splice(miraChooses(myCard), 1)[0];
+  // If Mira led, her card is already on the table; otherwise she answers.
+  const foeCard = state.leadCard || state.foeHand.splice(miraChooses(myCard), 1)[0];
+  state.leadCard = null;
   const myPow = power(myCard, foeCard);
   const foePow = power(foeCard, myCard);
 
@@ -284,21 +330,21 @@ function playCard(index){
   let headline, detail;
   if (myPow > foePow) {
     const dmg = myPow - foePow;
-    state.foeLife -= dmg; state.myTricks++;
+    state.foeLife -= dmg; state.myTricks++; state.leader = 'me';
     myEl.classList.add('winner'); foeEl.classList.add('loser');
     headline = 'You win the trick! Mira loses ' + dmg + ' life.';
     detail = myCard.value + ' of ' + suitById[myCard.suit].name + ' (' + myPow + ') beats ' +
              foeCard.value + ' of ' + suitById[foeCard.suit].name + ' (' + foePow + ').';
   } else if (foePow > myPow) {
     const dmg = foePow - myPow;
-    state.myLife -= dmg; state.foeTricks++;
+    state.myLife -= dmg; state.foeTricks++; state.leader = 'foe';
     foeEl.classList.add('winner'); myEl.classList.add('loser');
     headline = 'Mira wins the trick. You lose ' + dmg + ' life.';
     detail = foeCard.value + ' of ' + suitById[foeCard.suit].name + ' (' + foePow + ') beats your ' +
              myCard.value + ' of ' + suitById[myCard.suit].name + ' (' + myPow + ').';
   } else {
-    state.myLife -= 1; state.foeLife -= 1;
-    headline = 'A clash! Both duelists are singed for 1 life.';
+    state.myLife -= 1; state.foeLife -= 1; state.leader = 'foe';
+    headline = 'A clash! Both duelists are singed for 1 life. Mira leads the next trick.';
     detail = 'Dead even at power ' + myPow + ' — sparks fly, nobody yields.';
   }
   $('message').textContent = headline;
@@ -317,6 +363,9 @@ function playCard(index){
     }
     clearTable();
     render();
+    // The trick's winner leads the next one: when that is Mira, her lead
+    // card goes face-up on the table at once and the player answers it.
+    if (state.leader === 'foe') miraLeads();
   }, 1500);
 }
 function clearTable(){
@@ -354,7 +403,7 @@ function showEnd(won, drawn){
 function startGame(){
   rng = mulberry32(Number(params.get('seed') || 7));
   Object.assign(state, { myLife: START_LIFE, foeLife: START_LIFE, myTricks: 0, foeTricks: 0,
-    round: 1, trick: 1, busy: false, over: false });
+    round: 1, trick: 1, busy: false, over: false, leader: 'me', leadCard: null });
   dealHands();
   clearTable();
   $('message').textContent = 'Choose a card to open the duel.';
@@ -386,18 +435,19 @@ function freezeShot(){
   if (!shotMode || shotMode === 'title') { render(); return; }
   $('titleScreen').classList.add('hidden');
   if (shotMode === 'play') {
+    // Frozen mid-answer: Mira won the last trick, so she leads this one.
+    // Her 8 of Tide lies face-up and every card in the player's hand shows
+    // its live preview power against it — the game's new decision, shown.
     state.myLife = 14; state.foeLife = 11; state.myTricks = 3; state.foeTricks = 2;
-    state.round = 2; state.trick = 3;
-    state.myHand = [ {suit:'ember',value:9}, {suit:'tide',value:4}, {suit:'star',value:7}, {suit:'bloom',value:2} ];
-    state.foeHand = [ {suit:'tide',value:6}, {suit:'ember',value:3}, {suit:'bloom',value:8} ];
+    state.round = 2; state.trick = 3; state.leader = 'foe';
+    state.myHand = [ {suit:'ember',value:9}, {suit:'tide',value:4}, {suit:'star',value:7}, {suit:'bloom',value:10} ];
+    state.foeHand = [ {suit:'ember',value:3}, {suit:'bloom',value:8}, {suit:'star',value:2} ];
+    state.leadCard = { suit:'tide', value:8 };
     render();
-    const myCard = { suit:'bloom', value:10 }, foeCard = { suit:'tide', value:5 };
-    const myEl = cardEl(myCard, { showPow: power(myCard, foeCard), cls:'winner' });
-    const foeEl = cardEl(foeCard, { showPow: power(foeCard, myCard), cls:'loser' });
-    $('mySlot').replaceWith(myEl); myEl.id = 'mySlot';
+    const foeEl = cardEl(state.leadCard, { showPow: power(state.leadCard, null), cls:'leadcard' });
     $('foeSlot').replaceWith(foeEl); foeEl.id = 'foeSlot';
-    $('message').textContent = 'You win the trick! Mira loses 8 life.';
-    $('submessage').textContent = '10 of Bloom (13) beats 5 of Tide (5) — Bloom drinks Tide for +3.';
+    $('message').textContent = 'Mira leads with the 8 of Tide — answer it, or dump a card you do not need.';
+    $('submessage').textContent = 'Your 10 of Bloom scores 13 against her lead and wins; your 9 of Ember scores only 9. Choose.';
     state.busy = true; // freeze: no timers in a screenshot
   } else if (shotMode === 'win' || shotMode === 'loss') {
     const won = shotMode === 'win';
